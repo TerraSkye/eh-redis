@@ -230,7 +230,7 @@ func (s *EventStore) Clear(ctx context.Context) error {
 		for iter.Next() {
 			err := s.db.Del(iter.Val()).Err()
 			if err != nil {
-				panic(err)
+				return err
 			}
 		}
 		if err := iter.Err(); err != nil {
