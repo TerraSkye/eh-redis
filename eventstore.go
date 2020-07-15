@@ -1,0 +1,293 @@
+package ehpg
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"github.com/go-redis/redis"
+	"github.com/google/uuid"
+	eh "github.com/looplab/eventhorizon"
+	"sort"
+	"strconv"
+	"time"
+)
+
+// ErrCouldNotClearDB is when the database could not be cleared.
+var ErrCouldNotClearDB = errors.New("could not clear database")
+
+// ErrConflictVersion is when a version conflict occurs when saving an aggregate.
+var ErrVersionConflict = errors.New("Can not create/update aggregate")
+
+// ErrCouldNotMarshalEvent is when an event could not be marshaled into JSON.
+var ErrCouldNotMarshalEvent = errors.New("could not marshal event")
+
+// ErrCouldNotUnmarshalEvent is when an event could not be unmarshaled into a concrete type.
+var ErrCouldNotUnmarshalEvent = errors.New("could not unmarshal event")
+
+// ErrCouldNotSaveAggregate is when an aggregate could not be saved.
+var ErrCouldNotSaveAggregate = errors.New("could not save aggregate")
+
+// EventStore implements an eh.EventStore for PostgreSQL.
+type EventStore struct {
+	db      redis.UniversalClient
+	encoder Encoder
+}
+
+var _ = eh.EventStore(&EventStore{})
+
+type AggregateRecord struct {
+	Namespace   string
+	AggregateID uuid.UUID
+	Version     int
+}
+
+type AggregateEvent struct {
+	EventID       uuid.UUID
+	Namespace     string
+	AggregateID   uuid.UUID
+	AggregateType eh.AggregateType
+	EventType     eh.EventType
+	RawData       json.RawMessage
+	Timestamp     time.Time
+	Version       int
+	Context       map[string]interface{}
+	data          eh.EventData
+}
+
+func (a AggregateEvent) MarshalBinary() (data []byte, err error) {
+	return json.Marshal(a)
+}
+
+func (a *AggregateEvent) UnmarshalBinary(data []byte) error {
+	return json.Unmarshal(data, a)
+}
+
+// NewUUID for mocking in tests
+var NewUUID = uuid.New
+
+// newDBEvent returns a new dbEvent for an event.
+func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*AggregateEvent, error) {
+	ns := eh.NamespaceFromContext(ctx)
+
+	// Marshal event data if there is any.
+	raw, err := s.encoder.Marshal(event.Data())
+	if err != nil {
+		return nil, eh.EventStoreError{
+			BaseErr:   err,
+			Err:       ErrCouldNotMarshalEvent,
+			Namespace: ns,
+		}
+	}
+
+	return &AggregateEvent{
+		EventID:       NewUUID(),
+		AggregateID:   event.AggregateID(),
+		AggregateType: event.AggregateType(),
+		EventType:     event.EventType(),
+		RawData:       raw,
+		Timestamp:     event.Timestamp(),
+		Version:       event.Version(),
+		Context:       eh.MarshalContext(ctx),
+		Namespace:     ns,
+	}, nil
+}
+
+// NewEventStore creates a new EventStore.
+func NewEventStore(db redis.UniversalClient) (*EventStore, error) {
+
+	if response := db.Ping(); response.Err() != nil {
+		return nil, response.Err()
+	}
+
+	s := &EventStore{
+		db:      db,
+		encoder: &jsonEncoder{},
+	}
+
+	return s, nil
+}
+
+// Save implements the Save method of the eventhorizon.EventStore interface.
+func (s *EventStore) Save(ctx context.Context, events []eh.Event, originalVersion int) error {
+	ns := eh.NamespaceFromContext(ctx)
+
+	if len(events) == 0 {
+		return eh.EventStoreError{
+			Err:       eh.ErrNoEventsToAppend,
+			Namespace: ns,
+		}
+	}
+
+	// Build all event records, with incrementing versions starting from the
+	// original aggregate version.
+	dbEvents := make(map[string]interface{})
+	aggregateID := events[0].AggregateID()
+	version := originalVersion
+	for _, event := range events {
+		// Only accept events belonging to the same aggregate.
+		if event.AggregateID() != aggregateID {
+			return eh.EventStoreError{
+				Err:       eh.ErrInvalidEvent,
+				Namespace: ns,
+			}
+		}
+
+		// Only accept events that apply to the correct aggregate version.
+		if event.Version() != version+1 {
+			return eh.EventStoreError{
+				Err:       eh.ErrIncorrectEventVersion,
+				Namespace: ns,
+			}
+		}
+
+		// Create the event record for the DB.
+		e, err := s.newDBEvent(ctx, event)
+		if err != nil {
+			return err
+		}
+		dbEvents[strconv.Itoa(event.Version())] = *e
+		version++
+	}
+
+	err := s.db.Watch(func(tx *redis.Tx) error {
+		for version, event := range dbEvents {
+			if result := tx.HSetNX(fmt.Sprintf("%s:%s", ns, aggregateID), version, event); result.Val() == false {
+				return eh.EventStoreError{
+					BaseErr:   result.Err(),
+					Err:       ErrVersionConflict,
+					Namespace: ns,
+				}
+			}
+		}
+		return nil
+	}, fmt.Sprintf("%s:%s", ns, aggregateID))
+
+	if err != nil {
+		return eh.EventStoreError{
+			BaseErr:   err,
+			Err:       ErrCouldNotSaveAggregate,
+			Namespace: ns,
+		}
+	}
+
+	return nil
+}
+
+// Load implements the Load method of the eventhorizon.EventStore interface.
+func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error) {
+	ns := eh.NamespaceFromContext(ctx)
+
+	cmd := s.db.HGetAll(fmt.Sprintf("%s:%s", ns, id.String()))
+	var events []eh.Event
+
+	for _, dbEvent := range cmd.Val() {
+		e := AggregateEvent{}
+
+		if err := json.Unmarshal([]byte(dbEvent), &e); err != nil {
+			return nil, eh.EventStoreError{
+				BaseErr:   err,
+				Err:       ErrCouldNotUnmarshalEvent,
+				Namespace: ns,
+			}
+		}
+
+		if e.RawData != nil {
+			if eventData, err := s.encoder.Unmarshal(e.EventType, e.RawData); err != nil {
+				return nil, eh.EventStoreError{
+					BaseErr:   err,
+					Err:       ErrCouldNotUnmarshalEvent,
+					Namespace: ns,
+				}
+			} else {
+				e.data = eventData
+			}
+		}
+		e.RawData = nil
+
+		events = append(events, event{
+			AggregateEvent: e,
+		})
+	}
+
+	sort.Slice(events, func(i, j int) bool {
+		return events[i].Version() < events[j].Version()
+	})
+	return events, nil
+}
+
+func (s *EventStore) Close() error {
+	return s.db.Close()
+}
+
+// Clear clears the event storage.
+func (s *EventStore) Clear(ctx context.Context) error {
+	ns := eh.NamespaceFromContext(ctx)
+
+	err := s.db.Watch(func(tx *redis.Tx) error {
+		iter := tx.Scan(0, fmt.Sprintf("%s:*", ns), 0).Iterator()
+
+		for iter.Next() {
+			err := s.db.Del(iter.Val()).Err()
+			if err != nil {
+				panic(err)
+			}
+		}
+		if err := iter.Err(); err != nil {
+			return err
+		}
+
+		return nil
+	}, fmt.Sprintf("%s:*", ns))
+
+	if err != nil {
+		return eh.EventStoreError{
+			BaseErr:   err,
+			Err:       ErrCouldNotClearDB,
+			Namespace: ns,
+		}
+	}
+
+	return nil
+}
+
+// event is the private implementation of the eventhorizon.Event interface
+// for a MongoDB event store.
+type event struct {
+	AggregateEvent
+}
+
+// AggrgateID implements the AggrgateID method of the eventhorizon.Event interface.
+func (e event) AggregateID() uuid.UUID {
+	return e.AggregateEvent.AggregateID
+}
+
+// AggregateType implements the AggregateType method of the eventhorizon.Event interface.
+func (e event) AggregateType() eh.AggregateType {
+	return e.AggregateEvent.AggregateType
+}
+
+// EventType implements the EventType method of the eventhorizon.Event interface.
+func (e event) EventType() eh.EventType {
+	return e.AggregateEvent.EventType
+}
+
+// Data implements the Data method of the eventhorizon.Event interface.
+func (e event) Data() eh.EventData {
+	return e.AggregateEvent.data
+}
+
+// Version implements the Version method of the eventhorizon.Event interface.
+func (e event) Version() int {
+	return e.AggregateEvent.Version
+}
+
+// Timestamp implements the Timestamp method of the eventhorizon.Event interface.
+func (e event) Timestamp() time.Time {
+	return e.AggregateEvent.Timestamp
+}
+
+// String implements the String method of the eventhorizon.Event interface.
+func (e event) String() string {
+	return fmt.Sprintf("%s@%d", e.AggregateEvent.EventType, e.AggregateEvent.Version)
+}
