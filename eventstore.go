@@ -53,6 +53,7 @@ type AggregateEvent struct {
 	Version       int
 	Context       map[string]interface{}
 	data          eh.EventData
+	metadata      map[string]interface{}
 }
 
 func (a AggregateEvent) MarshalBinary() (data []byte, err error) {
@@ -89,6 +90,7 @@ func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*Aggregate
 		Timestamp:     event.Timestamp(),
 		Version:       event.Version(),
 		Context:       eh.MarshalContext(ctx),
+		metadata:      event.Metadata(),
 		Namespace:     ns,
 	}, nil
 }
@@ -252,9 +254,13 @@ func (s *EventStore) Clear(ctx context.Context) error {
 }
 
 // event is the private implementation of the eventhorizon.Event interface
-// for a MongoDB event store.
+// for a redis event store.
 type event struct {
 	AggregateEvent
+}
+
+func (e event) Metadata() map[string]interface{} {
+	return e.AggregateEvent.metadata
 }
 
 // AggrgateID implements the AggrgateID method of the eventhorizon.Event interface.
