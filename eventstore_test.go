@@ -4,15 +4,15 @@ import (
 	"context"
 	"github.com/go-redis/redis"
 	eh "github.com/looplab/eventhorizon"
-	testutil "github.com/looplab/eventhorizon/eventstore"
-	ehre "github.com/terraskye/eh-redis"
+	testsuite "github.com/looplab/eventhorizon/eventstore"
+	rediseventstore "github.com/terraskye/eh-redis"
 	"testing"
 )
 
 func TestEventStore(t *testing.T) {
 
 	options := redis.UniversalOptions{
-		Addrs:     []string{"127.0.0.1:6379"},
+		Addrs:     []string{"127.0.0.1:6380"},
 		DB:        0,
 		OnConnect: nil,
 		Password:  "",
@@ -21,7 +21,7 @@ func TestEventStore(t *testing.T) {
 
 	defer db.Close()
 
-	store, err := ehre.NewEventStore(db)
+	store, err := rediseventstore.NewEventStore(db)
 	if err != nil {
 		t.Fatal("there should be no error")
 	}
@@ -45,9 +45,9 @@ func TestEventStore(t *testing.T) {
 
 	// Run the actual test suite.
 	t.Log("event store with default namespace")
-	testutil.AcceptanceTest(t, context.Background(), store)
+	testsuite.AcceptanceTest(t, context.Background(), store)
 
 	t.Log("event store with other namespace")
-	testutil.AcceptanceTest(t, ctx, store)
+	testsuite.AcceptanceTest(t, ctx, store)
 
 }

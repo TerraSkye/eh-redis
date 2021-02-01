@@ -17,12 +17,12 @@ import (
 var ErrCouldNotClearDB = errors.New("could not clear database")
 
 // ErrConflictVersion is when a version conflict occurs when saving an aggregate.
-var ErrVersionConflict = errors.New("Can not create/update aggregate")
+var ErrVersionConflict = errors.New("can not create/update aggregate")
 
 // ErrCouldNotMarshalEvent is when an event could not be marshaled into JSON.
 var ErrCouldNotMarshalEvent = errors.New("could not marshal event")
 
-// ErrCouldNotUnmarshalEvent is when an event could not be unmarshaled into a concrete type.
+// ErrCouldNotUnmarshalEvent is when an event could not be unmarshalled into a concrete type.
 var ErrCouldNotUnmarshalEvent = errors.New("could not unmarshal event")
 
 // ErrCouldNotSaveAggregate is when an aggregate could not be saved.
@@ -226,6 +226,12 @@ func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error)
 					Namespace: ns,
 				}
 			}
+			for key, val := range e.MetaData {
+				if _, ok := val.(float64); ok {
+					intValue := int32(e.MetaData[key].(float64))
+					e.MetaData[key] = intValue
+				}
+			}
 		}
 		e.RawEventData = nil
 
@@ -285,7 +291,7 @@ func (e event) Metadata() map[string]interface{} {
 	return e.AggregateEvent.MetaData
 }
 
-// AggrgateID implements the AggrgateID method of the eventhorizon.Event interface.
+// AggregateID implements the AggregateID method of the eventhorizon.Event interface.
 func (e event) AggregateID() uuid.UUID {
 	return e.AggregateEvent.AggregateID
 }
