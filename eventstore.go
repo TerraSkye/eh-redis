@@ -48,12 +48,13 @@ type AggregateEvent struct {
 	AggregateID   uuid.UUID
 	AggregateType eh.AggregateType
 	EventType     eh.EventType
-	RawData       json.RawMessage
+	RawEventData  json.RawMessage
 	Timestamp     time.Time
 	Version       int
 	Context       map[string]interface{}
+	MetaData      map[string]interface{}
 	data          eh.EventData
-	metadata      map[string]interface{}
+	RawMetaData   json.RawMessage
 }
 
 func (a AggregateEvent) MarshalBinary() (data []byte, err error) {
@@ -72,7 +73,17 @@ func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*Aggregate
 	ns := eh.NamespaceFromContext(ctx)
 
 	// Marshal event data if there is any.
-	raw, err := s.encoder.Marshal(event.Data())
+	rawEventData, err := s.encoder.Marshal(event.Data())
+	if err != nil {
+		return nil, eh.EventStoreError{
+			BaseErr:   err,
+			Err:       ErrCouldNotMarshalEvent,
+			Namespace: ns,
+		}
+	}
+
+	// Marshal event data if there is any.
+	rawMetaData, err := json.Marshal(event.Metadata())
 	if err != nil {
 		return nil, eh.EventStoreError{
 			BaseErr:   err,
@@ -86,12 +97,12 @@ func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*Aggregate
 		AggregateID:   event.AggregateID(),
 		AggregateType: event.AggregateType(),
 		EventType:     event.EventType(),
-		RawData:       raw,
+		RawEventData:  rawEventData,
 		Timestamp:     event.Timestamp(),
 		Version:       event.Version(),
 		Context:       eh.MarshalContext(ctx),
-		metadata:      event.Metadata(),
 		Namespace:     ns,
+		RawMetaData:   rawMetaData,
 	}, nil
 }
 
@@ -194,8 +205,8 @@ func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error)
 			}
 		}
 
-		if e.RawData != nil {
-			if eventData, err := s.encoder.Unmarshal(e.EventType, e.RawData); err != nil {
+		if e.RawEventData != nil {
+			if eventData, err := s.encoder.Unmarshal(e.EventType, e.RawEventData); err != nil {
 				return nil, eh.EventStoreError{
 					BaseErr:   err,
 					Err:       ErrCouldNotUnmarshalEvent,
@@ -205,7 +216,18 @@ func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error)
 				e.data = eventData
 			}
 		}
-		e.RawData = nil
+		e.RawEventData = nil
+
+		if e.RawMetaData != nil {
+			if err := json.Unmarshal(e.RawMetaData, &e.MetaData); err != nil {
+				return nil, eh.EventStoreError{
+					BaseErr:   err,
+					Err:       ErrCouldNotUnmarshalEvent,
+					Namespace: ns,
+				}
+			}
+		}
+		e.RawEventData = nil
 
 		events = append(events, event{
 			AggregateEvent: e,
@@ -260,7 +282,7 @@ type event struct {
 }
 
 func (e event) Metadata() map[string]interface{} {
-	return e.AggregateEvent.metadata
+	return e.AggregateEvent.MetaData
 }
 
 // AggrgateID implements the AggrgateID method of the eventhorizon.Event interface.
