@@ -8,5 +8,5 @@ require (
 	github.com/go-redis/redis v6.15.7+incompatible
 	github.com/google/uuid v1.2.0
 	github.com/googleapis/gax-go v2.0.0+incompatible // indirect
-	github.com/looplab/eventhorizon v0.9.0
+	github.com/looplab/eventhorizon v0.11.0
 )
