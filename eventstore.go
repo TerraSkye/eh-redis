@@ -226,12 +226,6 @@ func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error)
 					Namespace: ns,
 				}
 			}
-			for key, val := range e.MetaData {
-				if _, ok := val.(float64); ok {
-					intValue := int32(e.MetaData[key].(float64))
-					e.MetaData[key] = intValue
-				}
-			}
 		}
 		e.RawEventData = nil
 
