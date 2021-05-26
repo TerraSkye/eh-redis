@@ -12,7 +12,7 @@ import (
 func TestEventStore(t *testing.T) {
 
 	options := redis.UniversalOptions{
-		Addrs:     []string{"127.0.0.1:6379"},
+		Addrs:     []string{"127.0.0.1:6380"},
 		DB:        0,
 		OnConnect: nil,
 		Password:  "",

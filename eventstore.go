@@ -51,7 +51,6 @@ type AggregateEvent struct {
 	RawEventData  json.RawMessage
 	Timestamp     time.Time
 	Version       int
-	Context       map[string]interface{}
 	MetaData      map[string]interface{}
 	data          eh.EventData
 	RawMetaData   json.RawMessage
@@ -82,7 +81,7 @@ func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*Aggregate
 		}
 	}
 
-	// Marshal event data if there is any.
+	// Marshal meta data if there is any.
 	rawMetaData, err := json.Marshal(event.Metadata())
 	if err != nil {
 		return nil, eh.EventStoreError{
@@ -97,11 +96,10 @@ func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*Aggregate
 		AggregateID:   event.AggregateID(),
 		AggregateType: event.AggregateType(),
 		EventType:     event.EventType(),
-		RawEventData:  rawEventData,
-		Timestamp:     event.Timestamp(),
 		Version:       event.Version(),
-		Context:       eh.MarshalContext(ctx),
+		Timestamp:     event.Timestamp(),
 		Namespace:     ns,
+		RawEventData:  rawEventData,
 		RawMetaData:   rawMetaData,
 	}, nil
 }
