@@ -8,6 +8,7 @@ import (
 	"github.com/go-redis/redis"
 	"github.com/google/uuid"
 	eh "github.com/looplab/eventhorizon"
+	"github.com/looplab/eventhorizon/namespace"
 	"sort"
 	"strconv"
 	"time"
@@ -69,15 +70,14 @@ var NewUUID = uuid.New
 
 // newDBEvent returns a new dbEvent for an event.
 func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*AggregateEvent, error) {
-	ns := eh.NamespaceFromContext(ctx)
+	ns := namespace.FromContext(ctx)
 
 	// Marshal event data if there is any.
 	rawEventData, err := s.encoder.Marshal(event.Data())
 	if err != nil {
 		return nil, eh.EventStoreError{
-			BaseErr:   err,
-			Err:       ErrCouldNotMarshalEvent,
-			Namespace: ns,
+			BaseErr: err,
+			Err:     ErrCouldNotMarshalEvent,
 		}
 	}
 
@@ -85,9 +85,8 @@ func (s *EventStore) newDBEvent(ctx context.Context, event eh.Event) (*Aggregate
 	rawMetaData, err := json.Marshal(event.Metadata())
 	if err != nil {
 		return nil, eh.EventStoreError{
-			BaseErr:   err,
-			Err:       ErrCouldNotMarshalEvent,
-			Namespace: ns,
+			BaseErr: err,
+			Err:     ErrCouldNotMarshalEvent,
 		}
 	}
 
@@ -121,12 +120,11 @@ func NewEventStore(db redis.UniversalClient) (*EventStore, error) {
 
 // Save implements the Save method of the eventhorizon.EventStore interface.
 func (s *EventStore) Save(ctx context.Context, events []eh.Event, originalVersion int) error {
-	ns := eh.NamespaceFromContext(ctx)
+	ns := namespace.FromContext(ctx)
 
 	if len(events) == 0 {
 		return eh.EventStoreError{
-			Err:       eh.ErrNoEventsToAppend,
-			Namespace: ns,
+			Err: eh.ErrNoEventsToAppend,
 		}
 	}
 
@@ -139,16 +137,14 @@ func (s *EventStore) Save(ctx context.Context, events []eh.Event, originalVersio
 		// Only accept events belonging to the same aggregate.
 		if event.AggregateID() != aggregateID {
 			return eh.EventStoreError{
-				Err:       eh.ErrInvalidEvent,
-				Namespace: ns,
+				Err: eh.ErrInvalidEvent,
 			}
 		}
 
 		// Only accept events that apply to the correct aggregate version.
 		if event.Version() != version+1 {
 			return eh.EventStoreError{
-				Err:       eh.ErrIncorrectEventVersion,
-				Namespace: ns,
+				Err: eh.ErrIncorrectEventVersion,
 			}
 		}
 
@@ -165,9 +161,8 @@ func (s *EventStore) Save(ctx context.Context, events []eh.Event, originalVersio
 		for version, event := range dbEvents {
 			if result := tx.HSetNX(fmt.Sprintf("%s:%s", ns, aggregateID), version, event); result.Val() == false {
 				return eh.EventStoreError{
-					BaseErr:   result.Err(),
-					Err:       ErrVersionConflict,
-					Namespace: ns,
+					BaseErr: result.Err(),
+					Err:     ErrVersionConflict,
 				}
 			}
 		}
@@ -176,9 +171,8 @@ func (s *EventStore) Save(ctx context.Context, events []eh.Event, originalVersio
 
 	if err != nil {
 		return eh.EventStoreError{
-			BaseErr:   err,
-			Err:       ErrCouldNotSaveAggregate,
-			Namespace: ns,
+			BaseErr: err,
+			Err:     ErrCouldNotSaveAggregate,
 		}
 	}
 
@@ -187,8 +181,7 @@ func (s *EventStore) Save(ctx context.Context, events []eh.Event, originalVersio
 
 // Load implements the Load method of the eventhorizon.EventStore interface.
 func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error) {
-	ns := eh.NamespaceFromContext(ctx)
-
+	ns := namespace.FromContext(ctx)
 	cmd := s.db.HGetAll(fmt.Sprintf("%s:%s", ns, id.String()))
 	var events []eh.Event
 
@@ -197,18 +190,16 @@ func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error)
 
 		if err := json.Unmarshal([]byte(dbEvent), &e); err != nil {
 			return nil, eh.EventStoreError{
-				BaseErr:   err,
-				Err:       ErrCouldNotUnmarshalEvent,
-				Namespace: ns,
+				BaseErr: err,
+				Err:     ErrCouldNotUnmarshalEvent,
 			}
 		}
 
 		if e.RawEventData != nil {
 			if eventData, err := s.encoder.Unmarshal(e.EventType, e.RawEventData); err != nil {
 				return nil, eh.EventStoreError{
-					BaseErr:   err,
-					Err:       ErrCouldNotUnmarshalEvent,
-					Namespace: ns,
+					BaseErr: err,
+					Err:     ErrCouldNotUnmarshalEvent,
 				}
 			} else {
 				e.data = eventData
@@ -219,9 +210,8 @@ func (s *EventStore) Load(ctx context.Context, id uuid.UUID) ([]eh.Event, error)
 		if e.RawMetaData != nil {
 			if err := json.Unmarshal(e.RawMetaData, &e.MetaData); err != nil {
 				return nil, eh.EventStoreError{
-					BaseErr:   err,
-					Err:       ErrCouldNotUnmarshalEvent,
-					Namespace: ns,
+					BaseErr: err,
+					Err:     ErrCouldNotUnmarshalEvent,
 				}
 			}
 		}
@@ -244,7 +234,7 @@ func (s *EventStore) Close() error {
 
 // Clear clears the event storage.
 func (s *EventStore) Clear(ctx context.Context) error {
-	ns := eh.NamespaceFromContext(ctx)
+	ns := namespace.FromContext(ctx)
 
 	err := s.db.Watch(func(tx *redis.Tx) error {
 		iter := tx.Scan(0, fmt.Sprintf("%s:*", ns), 0).Iterator()
@@ -264,9 +254,8 @@ func (s *EventStore) Clear(ctx context.Context) error {
 
 	if err != nil {
 		return eh.EventStoreError{
-			BaseErr:   err,
-			Err:       ErrCouldNotClearDB,
-			Namespace: ns,
+			BaseErr: err,
+			Err:     ErrCouldNotClearDB,
 		}
 	}
 

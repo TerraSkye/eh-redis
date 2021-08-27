@@ -3,8 +3,8 @@ package ehpg_test
 import (
 	"context"
 	"github.com/go-redis/redis"
-	eh "github.com/looplab/eventhorizon"
 	testsuite "github.com/looplab/eventhorizon/eventstore"
+	"github.com/looplab/eventhorizon/namespace"
 	rediseventstore "github.com/terraskye/eh-redis"
 	"testing"
 )
@@ -12,7 +12,7 @@ import (
 func TestEventStore(t *testing.T) {
 
 	options := redis.UniversalOptions{
-		Addrs:     []string{"127.0.0.1:6380"},
+		Addrs:     []string{"127.0.0.1:6379"},
 		DB:        0,
 		OnConnect: nil,
 		Password:  "",
@@ -29,7 +29,7 @@ func TestEventStore(t *testing.T) {
 		t.Fatal("there should be a store")
 	}
 
-	ctx := eh.NewContextWithNamespace(context.Background(), "ns")
+	ctx := namespace.NewContext(context.Background(), "ns")
 
 	_ = store.Clear(context.Background())
 
@@ -45,9 +45,9 @@ func TestEventStore(t *testing.T) {
 
 	// Run the actual test suite.
 	t.Log("event store with default namespace")
-	testsuite.AcceptanceTest(t, context.Background(), store)
+	testsuite.AcceptanceTest(t, store, ctx)
 
 	t.Log("event store with other namespace")
-	testsuite.AcceptanceTest(t, ctx, store)
+	testsuite.AcceptanceTest(t, store, namespace.NewContext(context.Background(), "other"))
 
 }
